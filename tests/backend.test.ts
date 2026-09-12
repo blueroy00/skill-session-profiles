@@ -34,7 +34,13 @@ it("accepts Windows absolute working directories", async () => {
   await expect(backend.call("get_skill_profile_state", {
     cwd: "C:\\Users\\blue\\project",
   })).resolves.toEqual({});
-  expect(state).toHaveBeenCalledWith("C:\\Users\\blue\\project");
+  expect(state).toHaveBeenCalledWith("C:\\Users\\blue\\project", true);
+
+  await expect(backend.call("get_skill_profile_state", {
+    cwd: "C:\\Users\\blue\\project",
+    compatibilityMode: false,
+  })).resolves.toEqual({});
+  expect(state).toHaveBeenLastCalledWith("C:\\Users\\blue\\project", false);
 
   await expect(backend.call("get_skill_profile_state", {
     cwd: "relative\\project",

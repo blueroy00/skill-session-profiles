@@ -60,7 +60,8 @@ const state = {
   ],
   projectConfig: {
     value: [{ path: "/skills/report/SKILL.md", enabled: true }],
-    filePath: "/repo/.codex/config.toml",
+    filePath: "/repo/AGENTS.md",
+    profileId: null,
   },
   projects: [
     { id: "project-1", name: "Current", rootPaths: ["/repo", "/repo-site"] },
@@ -170,8 +171,19 @@ describe("Skill Session Profiles app", () => {
 
     expect(screen.queryByText("Review", { exact: true })).toBeNull();
     expect(screen.getByText("没有匹配的 Skill")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "全部继承（0）" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "全部启用（0）" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "全部禁用（0）" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("shows the effective state beside inherited skill settings", async () => {
+    render(<App api={createApi()} cwd="/repo" />);
+    await screen.findByText("Skill Session Profiles");
+
+    expect((within(screen.getByRole("group", { name: "Review 设置" }))
+      .getByRole("radio", { name: "继承（开启）" }) as HTMLInputElement).checked).toBe(true);
+    expect((within(screen.getByRole("group", { name: "Report 设置" }))
+      .getByRole("radio", { name: "继承（关闭）" }) as HTMLInputElement).checked).toBe(true);
   });
 
   it("bulk-disables only visible skills and preserves hidden overrides", async () => {
@@ -220,6 +232,18 @@ describe("Skill Session Profiles app", () => {
     expect(screen.getByText("配置已应用。后续打开的所有任务都会沿用此配置。")).toBeTruthy();
   });
 
+  it("does not reset draft settings when the selected profile is clicked again", async () => {
+    render(<App api={createApi()} cwd="/repo" />);
+    await screen.findByText("Skill Session Profiles");
+    const profile = screen.getByRole("button", { name: /Daily1 当前 · 1 失效/ });
+    await userEvent.click(profile);
+    const review = screen.getByRole("group", { name: "Review 设置" });
+    await userEvent.click(within(review).getByRole("radio", { name: "停用" }));
+    await userEvent.click(profile);
+
+    expect((within(review).getByRole("radio", { name: "停用" }) as HTMLInputElement).checked).toBe(true);
+  });
+
   it("saves overrides for the selected project", async () => {
     const api = createApi();
     render(<App api={api} cwd="/repo" />);
@@ -232,6 +256,73 @@ describe("Skill Session Profiles app", () => {
     expect(api.call).toHaveBeenCalledWith("save_project_skill_configuration", {
       cwd: "/repo",
       overrides: [{ path: "/skills/report/SKILL.md", state: "disabled" }],
+      compatibilityMode: true,
+      profileId: null,
+    });
+  });
+
+  it("bulk-inherits only visible project skills", async () => {
+    const api = createApi();
+    render(<App api={api} cwd="/repo" />);
+    await screen.findByText("Skill Session Profiles");
+    await userEvent.click(screen.getByRole("button", { name: "项目配置" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "搜索 skill" }), "Report");
+    await userEvent.click(screen.getByRole("button", { name: "全部继承（1）" }));
+    await userEvent.click(screen.getByRole("button", { name: "保存项目配置" }));
+
+    expect(api.call).toHaveBeenCalledWith("save_project_skill_configuration", {
+      cwd: "/repo",
+      overrides: [],
+      compatibilityMode: true,
+      profileId: null,
+    });
+  });
+
+  it("binds project configuration to a task profile", async () => {
+    const api = createApi();
+    render(<App api={api} cwd="/repo" />);
+    await screen.findByText("Skill Session Profiles");
+    await userEvent.click(screen.getByRole("button", { name: "项目配置" }));
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "配置方式" }),
+      "profile",
+    );
+
+    expect((screen.getByRole("combobox", { name: "任务配置" }) as HTMLSelectElement).value).toBe("p1");
+    expect((within(screen.getByRole("group", { name: "Deploy 设置" }))
+      .getByRole("radio", { name: "启用" }) as HTMLInputElement).disabled).toBe(true);
+    await userEvent.click(screen.getByRole("button", { name: "保存项目配置" }));
+
+    expect(api.call).toHaveBeenCalledWith("save_project_skill_configuration", {
+      cwd: "/repo",
+      overrides: [{ path: "/skills/deploy/SKILL.md", state: "enabled" }],
+      compatibilityMode: true,
+      profileId: "p1",
+    });
+  });
+
+  it("persists native project mode and saves skills.config overrides", async () => {
+    const api = createApi();
+    render(<App api={api} cwd="/repo" />);
+    await screen.findByText("Skill Session Profiles");
+    await userEvent.click(screen.getByRole("button", { name: "项目配置" }));
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "兼容模式" }));
+    expect(localStorage.getItem("skill-session-profiles:project-skill-mode")).toBe("native");
+    expect(api.call).toHaveBeenCalledWith("get_skill_profile_state", {
+      cwd: "/repo",
+      compatibilityMode: false,
+    });
+
+    const reportSetting = screen.getByRole("group", { name: "Report 设置" });
+    await userEvent.click(reportSetting.querySelectorAll("input")[2]!);
+    await userEvent.click(screen.getByRole("button", { name: "保存项目配置" }));
+
+    expect(api.call).toHaveBeenCalledWith("save_project_skill_configuration", {
+      cwd: "/repo",
+      overrides: [{ path: "/skills/report/SKILL.md", state: "disabled" }],
+      compatibilityMode: false,
+      profileId: null,
     });
   });
 
@@ -244,6 +335,7 @@ describe("Skill Session Profiles app", () => {
     await userEvent.click(screen.getByRole("button", { name: /Mineradio/ }));
     expect(api.call).toHaveBeenCalledWith("get_skill_profile_state", {
       cwd: "/projects/Mineradio",
+      compatibilityMode: true,
     });
   });
 

@@ -1,6 +1,6 @@
 {
   "name": "skill-session-profiles",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "Manage Codex skill defaults, reusable profiles, and persistent task configuration.",
   "author": "Blue",
   "license": "GPL-3.0-only",

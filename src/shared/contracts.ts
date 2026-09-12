@@ -48,11 +48,21 @@ export const profilesFileSchema = z.object({
   activeProfileId: z.string().nullable().optional(),
 });
 
+export const projectBindingsFileSchema = z.object({
+  schemaVersion: z.literal(1),
+  bindings: z.array(z.object({
+    cwd: z.string().min(1),
+    profileId: z.string().min(1),
+    compatibilityMode: z.boolean(),
+  })),
+});
+
 export type SkillOverride = z.infer<typeof skillOverrideSchema>;
 export type ResourceToggleEntry = z.infer<typeof resourceToggleEntrySchema>;
 export type ResourceOverride = z.infer<typeof resourceOverrideSchema>;
 export type SkillProfile = z.infer<typeof skillProfileSchema>;
 export type ProfilesFile = z.infer<typeof profilesFileSchema>;
+export type ProjectBindingsFile = z.infer<typeof projectBindingsFileSchema>;
 
 export interface SkillMetadata {
   name: string;

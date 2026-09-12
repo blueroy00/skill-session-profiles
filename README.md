@@ -38,8 +38,10 @@ The app is currently unsigned and not notarized.
   directly from Task Configuration.
 - Save profiles as reusable templates, then explicitly apply one on top of
   global defaults for subsequently opened tasks.
-- Save project-specific Skill guidance in a managed block inside the selected
-  project's `AGENTS.md`.
+- Choose compatibility mode to save project-specific Skill guidance in
+  `AGENTS.md`, or write it directly to the project's `.codex/config.toml`.
+- Let a project follow a reusable task profile or maintain independent
+  overrides.
 - Select local projects in the same order as the Codex project sidebar.
 - Edit global skill defaults through the Codex App Server contract.
 - Switch between Chinese and English, light and dark themes.
@@ -53,19 +55,29 @@ Saving a profile only updates the reusable template. Selecting and applying it
 from Task Configuration writes its explicit overrides to the user-level
 configuration; editing the template later does not silently reapply it.
 
-Project configurations contain explicit overrides only. The app updates a
-marked, managed block in the project-root `AGENTS.md` through the Codex App
-Server filesystem API while preserving all unrelated project guidance.
-If the project root already contains `AGENTS.override.md`, the app updates that
-active file instead because Codex gives it precedence over `AGENTS.md`.
+Project configurations contain explicit overrides only. Compatibility mode is
+enabled by default. It updates a marked, managed block in the project-root
+`AGENTS.md` through the Codex App Server filesystem API while preserving all
+unrelated project guidance. If the project root already contains
+`AGENTS.override.md`, the app updates that active file instead because Codex
+gives it precedence over `AGENTS.md`. With compatibility mode disabled, the app
+updates `[[skills.config]]` in the project's `.codex/config.toml` while
+preserving its other TOML settings and comments. The selected mode is stored in
+local app preferences.
 
-This is a temporary compatibility approach. Codex CLI 0.140.0 parses project
-`skills.config` but does not apply project-level overrides to plugin-provided
-Skills during discovery. Project `AGENTS.md` guidance is loaded after global
-guidance, so it can instruct Codex not to invoke selected Skills in that
-project without changing global configuration. This is instruction-level
-control: disabled Skills can still appear in discovery, and an explicitly
-allowed Skill must already be installed, loaded, and enabled globally.
+When a project follows a task profile, the app persists that binding and
+resynchronizes the project whenever the profile is edited or replaced through
+import. Deleting the profile removes the binding while preserving the project's
+last synchronized configuration.
+
+Compatibility mode works around incomplete project override handling for some
+plugin-provided Skills in Codex CLI 0.140.0. Project `AGENTS.md` guidance is
+loaded after global guidance, so it can instruct Codex not to invoke selected
+Skills in that project without changing global configuration. This is
+instruction-level control: disabled Skills can still appear in discovery, and
+an explicitly allowed Skill must already be installed, loaded, and enabled
+globally. Native mode uses Codex's project configuration behavior, so its exact
+effect depends on the installed Codex version.
 
 User data is stored locally at:
 

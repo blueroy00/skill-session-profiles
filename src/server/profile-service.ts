@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { basename, isAbsolute, join, normalize } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize } from "node:path";
 
 import type { AppServerClient } from "./app-server-client.js";
-import { extractUserSkillLayer } from "./config-layer.js";
+import { extractProjectSkillLayer, extractUserSkillLayer } from "./config-layer.js";
 import { JsonStore } from "./json-store.js";
 import { readProjectSkillPolicy, replaceProjectSkillPolicy } from "./project-agents.js";
+import { replaceProjectSkillConfig } from "./project-config.js";
 import {
   skillProfileSchema,
+  type ProfilesFile,
   type SkillConfigEntry,
   type SkillOverride,
   type SkillProfile,
@@ -75,6 +77,7 @@ export class ProfileService {
       file.profiles = [...file.profiles.filter((item) => item.id !== profile.id), profile];
       if (file.activeProfileId === profile.id) file.activeProfileId = null;
       await this.store.writeProfiles(file);
+      await this.syncProjectBindings(file, profile.id);
       return profile;
     });
   }
@@ -85,6 +88,29 @@ export class ProfileService {
       file.profiles = file.profiles.filter((profile) => profile.id !== id);
       if (file.activeProfileId === id) file.activeProfileId = null;
       await this.store.writeProfiles(file);
+      const bindings = await this.store.readProjectBindings();
+      bindings.bindings = bindings.bindings.filter((binding) => binding.profileId !== id);
+      await this.store.writeProjectBindings(bindings);
+    });
+  }
+
+  async importProfiles(incoming: ProfilesFile, mode: "merge" | "replace"): Promise<ProfilesFile> {
+    return this.store.withLock(async () => {
+      const current = await this.store.readProfiles();
+      const next: ProfilesFile = {
+        schemaVersion: 1,
+        profiles: mode === "replace"
+          ? incoming.profiles
+          : [
+              ...current.profiles.filter(
+                (a) => !incoming.profiles.some((b) => a.id === b.id),
+              ),
+              ...incoming.profiles,
+            ],
+      };
+      await this.store.writeProfiles(next);
+      await this.syncProjectBindings(next);
+      return next;
     });
   }
 
@@ -143,35 +169,99 @@ export class ProfileService {
     });
   }
 
-  async saveProjectConfiguration(cwd: string, overrides: SkillOverride[]): Promise<SkillConfigEntry[]> {
+  async saveProjectConfiguration(
+    cwd: string,
+    overrides: SkillOverride[],
+    compatibilityMode = true,
+    profileId: string | null = null,
+  ): Promise<SkillConfigEntry[]> {
     return this.store.withLock(async () => {
-      const inventory = await this.client.listSkills([cwd], true);
-      const layer = await readProjectSkillPolicy(this.client, cwd);
-      const allowed = new Set(canonicalize([
-        ...inventory.data.flatMap((item) => item.skills.map((skill) => ({
-          path: skill.path, enabled: skill.enabled,
-        }))),
-        ...layer.value,
-      ]).flatMap((entry) => entry.path === undefined ? [] : [entry.path]));
-      if (overrides.some((override) => !allowed.has(canonicalize([
-        { path: override.path, enabled: true },
-      ])[0].path!))) {
-        throw new Error("unknown skill path");
-      }
-      const value = canonicalize([
-        ...layer.value.filter((entry) => entry.path === undefined),
-        ...overrides.map(({ path, state }) => ({
-          path,
-          enabled: state === "enabled",
-        })),
-      ]);
-      const names = new Map(inventory.data.flatMap((item) =>
-        item.skills.map((skill) => [canonicalize([{ path: skill.path, enabled: true }])[0].path!, skill.name] as const)));
-      const updated = replaceProjectSkillPolicy(layer.source, value, names);
-      await this.client.writeFile(layer.filePath, updated);
+      const profile = profileId === null
+        ? undefined
+        : (await this.store.readProfiles()).profiles.find((item) => item.id === profileId);
+      if (profileId !== null && profile === undefined) throw new Error("unknown skill profile");
+      const value = await this.writeProjectConfiguration(
+        cwd,
+        profile?.overrides ?? overrides,
+        compatibilityMode,
+        profile !== undefined,
+      );
+      const bindings = await this.store.readProjectBindings();
+      const normalizedCwd = normalize(cwd);
+      bindings.bindings = [
+        ...bindings.bindings.filter((binding) => normalize(binding.cwd) !== normalizedCwd),
+        ...(profileId === null ? [] : [{ cwd: normalizedCwd, profileId, compatibilityMode }]),
+      ];
+      await this.store.writeProjectBindings(bindings);
       await this.store.appendAudit({ action: "project-config-saved", cwd });
       return value;
     });
+  }
+
+  private async syncProjectBindings(file: ProfilesFile, profileId?: string): Promise<void> {
+    const bindings = await this.store.readProjectBindings();
+    const profiles = new Map(file.profiles.map((profile) => [profile.id, profile]));
+    const active = bindings.bindings.filter((binding) => profiles.has(binding.profileId));
+    if (active.length !== bindings.bindings.length) {
+      await this.store.writeProjectBindings({ schemaVersion: 1, bindings: active });
+    }
+    await Promise.all(active
+      .filter((binding) => profileId === undefined || binding.profileId === profileId)
+      .map((binding) => this.writeProjectConfiguration(
+        binding.cwd,
+        profiles.get(binding.profileId)!.overrides,
+        binding.compatibilityMode,
+        true,
+      )));
+  }
+
+  private async writeProjectConfiguration(
+    cwd: string,
+    overrides: SkillOverride[],
+    compatibilityMode: boolean,
+    ignoreUnknown = false,
+  ): Promise<SkillConfigEntry[]> {
+    const [inventory, layer] = await Promise.all([
+      this.client.listSkills([cwd], true),
+      compatibilityMode
+        ? readProjectSkillPolicy(this.client, cwd)
+        : this.client.readConfig(cwd).then((config) => extractProjectSkillLayer(config, cwd)),
+    ]);
+    const allowed = new Set(canonicalize([
+      ...inventory.data.flatMap((item) => item.skills.map((skill) => ({
+        path: skill.path, enabled: skill.enabled,
+      }))),
+      ...layer.value,
+    ]).flatMap((entry) => entry.path === undefined ? [] : [entry.path]));
+    const knownOverrides = overrides.filter((override) => allowed.has(canonicalize([
+      { path: override.path, enabled: true },
+    ])[0].path!));
+    if (!ignoreUnknown && knownOverrides.length !== overrides.length) {
+      throw new Error("unknown skill path");
+    }
+    const value = canonicalize([
+      ...layer.value.filter((entry) => entry.path === undefined),
+      ...knownOverrides.map(({ path, state }) => ({
+        path,
+        enabled: state === "enabled",
+      })),
+    ]);
+    const names = new Map(inventory.data.flatMap((item) =>
+      item.skills.map((skill) => [canonicalize([{ path: skill.path, enabled: true }])[0].path!, skill.name] as const)));
+    if (compatibilityMode) {
+      const source = "source" in layer ? layer.source : "";
+      await this.client.writeFile(layer.filePath, replaceProjectSkillPolicy(source, value, names));
+    } else {
+      const directory = dirname(layer.filePath);
+      await this.client.createDirectory(directory);
+      const entries = await this.client.readDirectory(directory);
+      const source = entries.some((entry) =>
+        entry.fileName === basename(layer.filePath) && entry.isFile)
+        ? await this.client.readFile(layer.filePath)
+        : "";
+      await this.client.writeFile(layer.filePath, replaceProjectSkillConfig(source, value));
+    }
+    return value;
   }
 
   private async requireBatchWrite(): Promise<void> {

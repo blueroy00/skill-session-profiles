@@ -13,6 +13,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   SlidersHorizontal,
   Sun,
@@ -39,6 +40,8 @@ type ResourceKind = "plugin" | "mcp" | "skill";
 type ResourceScope = "global" | "project";
 type Language = "zh" | "en";
 type Theme = "light" | "dark";
+type ProjectSkillMode = "compatibility" | "native";
+type ProjectConfigurationMode = "profile" | "independent";
 type ProfileDraft = {
   id?: string;
   name: string;
@@ -47,7 +50,7 @@ type ProfileDraft = {
 type State = {
   skills: SkillMetadata[];
   globalDefaults: Array<{ path: string; enabled: boolean }>;
-  projectConfig: { value: Array<{ path: string; enabled: boolean }>; filePath: string };
+  projectConfig: { value: Array<{ path: string; enabled: boolean }>; filePath: string; profileId?: string | null };
   plugins?: PluginMetadata[];
   mcpServers?: McpServerMetadata[];
   globalPluginConfig?: ResourceToggleEntry[];
@@ -75,7 +78,11 @@ const COPY = {
     defaultBehavior: "默认行为", defaultDetail: "所有新任务首先继承这里的设置。配置方案只保存明确的单项覆盖。",
     totalSkills: "Skill 总数", enabledByDefault: "默认启用", disabledByDefault: "默认停用",
     persistentDetail: "应用后，后续打开的所有 Codex 任务都会沿用此配置。",
-    projectDetail: "仅对此项目生效；保存到项目根目录 AGENTS.md 的受管区块，未设置项继承全局默认。",
+    projectDetailCompatibility: "仅对此项目生效；保存到项目根目录 AGENTS.md 的受管区块，未设置项继承全局默认。",
+    projectDetailNative: "仅对此项目生效；保存到项目 .codex/config.toml 的 skills.config，未设置项继承全局默认。",
+    compatibilityMode: "兼容模式", projectConfigurationMode: "配置方式",
+    followTaskProfile: "跟随任务配置", independentConfiguration: "单独配置", taskProfile: "任务配置",
+    effectiveOn: "开启", effectiveOff: "关闭",
     profileDetail: "保存可复用的单项覆盖；未设置项始终继承全局默认。",
     import: "导入", export: "导出", profileName: "方案名称", profilePlaceholder: "例如：代码审查",
     defaultsDetail: "这里的启用状态是所有新任务和配置方案的继承基础。", enabledItems: "项启用",
@@ -85,7 +92,7 @@ const COPY = {
     inherit: "继承", enabled: "启用", disabled: "停用", noMatch: "没有匹配的 Skill",
     noMatchDetail: "调整名称搜索或来源筛选后重试。", skillSource: "Skill 来源", allSources: "全部来源",
     user: "用户", repo: "仓库", system: "系统", admin: "管理", search: "搜索 Skill 名称",
-    searchAria: "搜索 skill", clearSearch: "清空搜索", enableAll: "全部启用", disableAll: "全部禁用",
+    searchAria: "搜索 skill", clearSearch: "清空搜索", inheritAll: "全部继承", enableAll: "全部启用", disableAll: "全部禁用",
     skills: "个 Skill", switchLanguage: "Switch to English", switchTheme: "切换到黑夜模式", switchingProject: "正在切换项目…",
     plugins: "插件", mcp: "MCP", skillTab: "技能", globalScope: "全局", projectScope: "项目",
     pluginDetail: "控制已安装插件在所有后续 Codex 任务中的可用状态。",
@@ -103,7 +110,11 @@ const COPY = {
     defaultBehavior: "Default behavior", defaultDetail: "New tasks inherit these settings. Profiles store explicit overrides only.",
     totalSkills: "Total skills", enabledByDefault: "Enabled by default", disabledByDefault: "Disabled by default",
     persistentDetail: "After applying, all subsequently opened Codex tasks will use this configuration.",
-    projectDetail: "Applies only to this project through a managed block in the project-root AGENTS.md; unset skills inherit global defaults.",
+    projectDetailCompatibility: "Applies only to this project through a managed block in the project-root AGENTS.md; unset skills inherit global defaults.",
+    projectDetailNative: "Applies only to this project through skills.config in .codex/config.toml; unset skills inherit global defaults.",
+    compatibilityMode: "Compatibility mode", projectConfigurationMode: "Configuration mode",
+    followTaskProfile: "Follow task profile", independentConfiguration: "Independent", taskProfile: "Task profile",
+    effectiveOn: "On", effectiveOff: "Off",
     profileDetail: "Save reusable overrides. Unset skills always inherit global defaults.",
     import: "Import", export: "Export", profileName: "Profile name", profilePlaceholder: "Example: Code review",
     defaultsDetail: "These states are inherited by new tasks and profiles.", enabledItems: "enabled",
@@ -113,7 +124,7 @@ const COPY = {
     inherit: "Inherit", enabled: "Enabled", disabled: "Disabled", noMatch: "No matching skills",
     noMatchDetail: "Change the name search or source filter and try again.", skillSource: "Skill source", allSources: "All sources",
     user: "User", repo: "Repository", system: "System", admin: "Admin", search: "Search skill names",
-    searchAria: "Search skills", clearSearch: "Clear search", enableAll: "Enable All", disableAll: "Disable All",
+    searchAria: "Search skills", clearSearch: "Clear search", inheritAll: "Inherit All", enableAll: "Enable All", disableAll: "Disable All",
     skills: "skills", switchLanguage: "切换到中文", switchTheme: "Switch to dark mode", switchingProject: "Switching project…",
     plugins: "Plugins", mcp: "MCP", skillTab: "Skills", globalScope: "Global", projectScope: "Project",
     pluginDetail: "Control whether installed plugins are available to future Codex tasks.",
@@ -145,6 +156,8 @@ export function App({ api, cwd }: { api: AppApi; cwd: string }) {
   const [nextProfileId, setNextProfileId] = useState<string | null>(null);
   const [nextOverrides, setNextOverrides] = useState<SkillOverride[]>([]);
   const [projectOverrides, setProjectOverrides] = useState<SkillOverride[]>([]);
+  const [projectConfigurationMode, setProjectConfigurationMode] = useState<ProjectConfigurationMode>("independent");
+  const [projectProfileId, setProjectProfileId] = useState<string | null>(null);
   const [profileDraft, setProfileDraft] = useState<ProfileDraft | null>(null);
   const [defaultValues, setDefaultValues] = useState<Record<string, boolean>>({});
   const [pluginGlobalValues, setPluginGlobalValues] = useState<Record<string, boolean>>({});
@@ -155,11 +168,23 @@ export function App({ api, cwd }: { api: AppApi; cwd: string }) {
   const [language, setLanguage] = useState<Language>(() => readPreference("language", "zh"));
   const [theme, setTheme] = useState<Theme>(() =>
     readPreference("theme", window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+  const [projectSkillMode, setProjectSkillMode] = useState<ProjectSkillMode>(() =>
+    readPreference("project-skill-mode", "compatibility"));
   const searchRef = useRef<HTMLInputElement>(null);
   const copy = COPY[language];
+  const compatibilityMode = projectSkillMode === "compatibility";
+  const inheritedValues = useMemo(() => Object.fromEntries(
+    (state?.skills ?? []).map((skill) => [
+      skill.path,
+      state?.globalDefaults.find((item) => item.path === skill.path)?.enabled ?? skill.enabled,
+    ]),
+  ), [state]);
 
-  const loadState = async (targetCwd = activeCwd) => {
-    const value = await api.call("get_skill_profile_state", { cwd: targetCwd });
+  const loadState = async (targetCwd = activeCwd, mode = projectSkillMode) => {
+    const value = await api.call("get_skill_profile_state", {
+      cwd: targetCwd,
+      compatibilityMode: mode === "compatibility",
+    });
     setState(value as unknown as State);
     setError("");
   };
@@ -167,7 +192,10 @@ export function App({ api, cwd }: { api: AppApi; cwd: string }) {
   useEffect(() => {
     let active = true;
     setLoadingCwd(activeCwd);
-    void api.call("get_skill_profile_state", { cwd: activeCwd })
+    void api.call("get_skill_profile_state", {
+      cwd: activeCwd,
+      compatibilityMode,
+    })
       .then((value) => {
         if (!active) return;
         setState(value as unknown as State);
@@ -182,20 +210,17 @@ export function App({ api, cwd }: { api: AppApi; cwd: string }) {
     return () => {
       active = false;
     };
-  }, [activeCwd, api]);
+  }, [activeCwd, api, compatibilityMode]);
 
   useEffect(() => {
     if (!state) return;
-    setDefaultValues(Object.fromEntries(
-      state.skills.map((skill) => [
-        skill.path,
-        state.globalDefaults.find((item) => item.path === skill.path)?.enabled ?? skill.enabled,
-      ]),
-    ));
+    setDefaultValues(inheritedValues);
     setProjectOverrides(state.projectConfig.value.map((entry) => ({
       path: entry.path,
       state: entry.enabled ? "enabled" : "disabled",
     })));
+    setProjectProfileId(state.projectConfig.profileId ?? null);
+    setProjectConfigurationMode(state.projectConfig.profileId ? "profile" : "independent");
     setPluginGlobalValues(Object.fromEntries(
       (state.globalPluginConfig ?? []).map((entry) => [entry.id, entry.enabled]),
     ));
@@ -210,7 +235,7 @@ export function App({ api, cwd }: { api: AppApi; cwd: string }) {
       id: entry.id,
       state: entry.enabled ? "enabled" : "disabled",
     })));
-  }, [state]);
+  }, [inheritedValues, state]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -232,6 +257,10 @@ export function App({ api, cwd }: { api: AppApi; cwd: string }) {
     document.documentElement.dataset.theme = theme;
     writePreference("theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    writePreference("project-skill-mode", projectSkillMode);
+  }, [projectSkillMode]);
 
   const displayedSkills = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase();
@@ -286,16 +315,19 @@ export function App({ api, cwd }: { api: AppApi; cwd: string }) {
       || profileDraft.name !== selectedSavedProfile?.name
       || overridesKey(profileDraft.overrides) !== overridesKey(selectedSavedProfile?.overrides ?? []));
   const defaultsDirty = state !== null && state.skills.some((skill) => {
-    const initial = state.globalDefaults.find((item) => item.path === skill.path)?.enabled ?? skill.enabled;
+    const initial = inheritedValues[skill.path] ?? skill.enabled;
     return defaultValues[skill.path] !== initial;
   });
   const currentNextOverrides = currentOverrides(nextOverrides, inventoryPaths);
   const currentProjectOverrides = currentOverrides(projectOverrides, inventoryPaths);
   const projectDirty = state !== null
-    && overridesKey(projectOverrides) !== overridesKey(state.projectConfig.value.map((entry) => ({
-      path: entry.path,
-      state: entry.enabled ? "enabled" : "disabled",
-    })));
+    && (
+      projectProfileId !== (state.projectConfig.profileId ?? null)
+      || overridesKey(projectOverrides) !== overridesKey(state.projectConfig.value.map((entry) => ({
+        path: entry.path,
+        state: entry.enabled ? "enabled" : "disabled",
+      })))
+    );
   const pluginGlobalDirty = state !== null
     && toggleValuesKey(pluginGlobalValues, state.plugins ?? [])
       !== toggleEntriesKey(state.globalPluginConfig ?? []);
@@ -347,6 +379,8 @@ export function App({ api, cwd }: { api: AppApi; cwd: string }) {
       setNextProfileId(null);
       setNextOverrides([]);
       setProjectOverrides([]);
+      setProjectConfigurationMode("independent");
+      setProjectProfileId(null);
       setProfileDraft(null);
       setQuery("");
     }
@@ -490,6 +524,13 @@ export function App({ api, cwd }: { api: AppApi; cwd: string }) {
           draft={profileDraft}
           deleteConfirmId={deleteConfirmId}
           onChoose={(profile) => {
+            if (
+              (profile !== null && (
+                profileDraft?.id === profile.id
+                || (profileDraft === null && nextProfileId === profile.id)
+              ))
+              || (profile === null && profileDraft === null && nextProfileId === null)
+            ) return;
             selectNextProfile(profile);
             setProfileDraft(null);
           }}
@@ -616,6 +657,7 @@ export function App({ api, cwd }: { api: AppApi; cwd: string }) {
             scopeFilter={scopeFilter}
             setScopeFilter={setScopeFilter}
             overrides={nextOverrides}
+            inheritedValues={inheritedValues}
             setOverride={(path, value) => setNextOverrides((current) => updateOverride(current, path, value))}
             setAll={(value) => setNextOverrides((current) =>
               applyVisibleOverrides(current, displayedSkills, value))}
@@ -666,6 +708,7 @@ export function App({ api, cwd }: { api: AppApi; cwd: string }) {
                   scopeFilter={scopeFilter}
                   setScopeFilter={setScopeFilter}
                   overrides={profileDraft.overrides}
+                  inheritedValues={inheritedValues}
                   setOverride={(path, value) => setProfileDraft({
                     ...profileDraft,
                     overrides: updateOverride(profileDraft.overrides, path, value),
@@ -681,11 +724,68 @@ export function App({ api, cwd }: { api: AppApi; cwd: string }) {
         {tab === "project" && <>
           <PaneHeader
             title={selectedProject?.name ?? lastPathPart(activeCwd)}
-            description={copy.projectDetail}
+            description={compatibilityMode
+              ? copy.projectDetailCompatibility
+              : copy.projectDetailNative}
             count={currentProjectOverrides.length}
             countLabel={language === "zh" ? "项项目覆盖" : "project overrides"}
-            actions={selectedProject && selectedProject.rootPaths.length > 1
-              ? <label className="project-root-select">
+            actions={<>
+              <label className="project-option-select">
+                <span>{copy.projectConfigurationMode}</span>
+                <select
+                  aria-label={copy.projectConfigurationMode}
+                  value={projectConfigurationMode}
+                  onChange={(event) => {
+                    const mode = event.target.value as ProjectConfigurationMode;
+                    setProjectConfigurationMode(mode);
+                    if (mode === "independent") {
+                      setProjectProfileId(null);
+                      return;
+                    }
+                    const profile = state?.profiles[0];
+                    if (profile) {
+                      setProjectProfileId(profile.id);
+                      setProjectOverrides(currentOverrides(profile.overrides, inventoryPaths));
+                    }
+                  }}
+                >
+                  <option value="independent">{copy.independentConfiguration}</option>
+                  <option value="profile" disabled={(state?.profiles.length ?? 0) === 0}>{copy.followTaskProfile}</option>
+                </select>
+              </label>
+              {projectConfigurationMode === "profile" && <label className="project-option-select">
+                <span>{copy.taskProfile}</span>
+                <select
+                  aria-label={copy.taskProfile}
+                  value={projectProfileId ?? ""}
+                  onChange={(event) => {
+                    if (event.target.value === projectProfileId) return;
+                    const profile = state?.profiles.find((item) => item.id === event.target.value);
+                    if (!profile) return;
+                    setProjectProfileId(profile.id);
+                    setProjectOverrides(currentOverrides(profile.overrides, inventoryPaths));
+                  }}
+                >
+                  {(state?.profiles ?? []).map((profile) =>
+                    <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+                </select>
+              </label>}
+              <label className="toggle-control project-mode-toggle">
+                <input
+                  type="checkbox"
+                  checked={compatibilityMode}
+                  onChange={(event) => {
+                    if (projectDirty && !window.confirm(language === "zh"
+                      ? "当前项目配置尚未保存，确定切换配置模式吗？"
+                      : "The current project configuration is unsaved. Switch configuration modes?")) return;
+                    setProjectSkillMode(event.target.checked ? "compatibility" : "native");
+                  }}
+                />
+                <span aria-hidden="true" />
+                <strong>{copy.compatibilityMode}</strong>
+              </label>
+              {selectedProject && selectedProject.rootPaths.length > 1
+                ? <label className="project-root-select">
                   <span>{copy.projectRoots}</span>
                   <select
                     aria-label={copy.projectRoots}
@@ -697,7 +797,8 @@ export function App({ api, cwd }: { api: AppApi; cwd: string }) {
                       <option key={root} value={root}>{lastPathPart(root)}</option>)}
                   </select>
                 </label>
-              : undefined}
+                : undefined}
+            </>}
           />
           <SkillWorkbench
             skills={displayedSkills}
@@ -708,6 +809,8 @@ export function App({ api, cwd }: { api: AppApi; cwd: string }) {
             scopeFilter={scopeFilter}
             setScopeFilter={setScopeFilter}
             overrides={projectOverrides}
+            inheritedValues={inheritedValues}
+            readOnly={projectConfigurationMode === "profile"}
             setOverride={(path, value) => setProjectOverrides((current) => updateOverride(current, path, value))}
             setAll={(value) => setProjectOverrides((current) =>
               applyVisibleOverrides(current, displayedSkills, value))}
@@ -835,6 +938,8 @@ export function App({ api, cwd }: { api: AppApi; cwd: string }) {
           onClick={() => void run("save_project_skill_configuration", {
             cwd: activeCwd,
             overrides: currentProjectOverrides,
+            compatibilityMode,
+            profileId: projectConfigurationMode === "profile" ? projectProfileId : null,
           }, () => {
             setSuccess(language === "zh"
               ? "项目配置已保存。重新打开或派生的此项目任务会使用它。"
@@ -1182,7 +1287,7 @@ function ResourceFilterBar({
   </div>;
 }
 
-function SkillWorkbench({ skills, total, query, setQuery, searchRef, scopeFilter, setScopeFilter, overrides, setOverride, setAll }: {
+function SkillWorkbench({ skills, total, query, setQuery, searchRef, scopeFilter, setScopeFilter, overrides, inheritedValues, readOnly = false, setOverride, setAll }: {
   skills: SkillMetadata[];
   total: number;
   query: string;
@@ -1191,8 +1296,10 @@ function SkillWorkbench({ skills, total, query, setQuery, searchRef, scopeFilter
   scopeFilter: string;
   setScopeFilter(value: string): void;
   overrides: SkillOverride[];
+  inheritedValues: Record<string, boolean>;
+  readOnly?: boolean;
   setOverride(path: string, value: "inherit" | "enabled" | "disabled"): void;
-  setAll(value: "enabled" | "disabled"): void;
+  setAll(value: "inherit" | "enabled" | "disabled"): void;
 }) {
   const copy = useCopy();
   const english = useContext(LanguageContext) === "en";
@@ -1209,6 +1316,8 @@ function SkillWorkbench({ skills, total, query, setQuery, searchRef, scopeFilter
       setScopeFilter={setScopeFilter}
       visibleCount={skills.length}
       total={total}
+      readOnly={readOnly}
+      onInherit={() => setAll("inherit")}
       onEnable={() => setAll("enabled")}
       onDisable={() => setAll("disabled")}
     />
@@ -1219,6 +1328,7 @@ function SkillWorkbench({ skills, total, query, setQuery, searchRef, scopeFilter
       <div className="table-scroll">
         {skills.map((skill) => {
           const value = overrideMap.get(skill.path) ?? "inherit";
+          const inheritedStatus = inheritedValues[skill.path] ?? skill.enabled;
           return <div className="skill-row" key={skill.path}>
             <div className="skill-info">
               <strong>{skill.name}</strong>
@@ -1227,8 +1337,10 @@ function SkillWorkbench({ skills, total, query, setQuery, searchRef, scopeFilter
             <span className="scope-label">{copy[skill.scope]}</span>
             <fieldset className="segmented-control" aria-label={`${skill.name} ${copy.setting}`}>
               {(["inherit", "enabled", "disabled"] as const).map((choice) => <label key={choice}>
-                <input type="radio" checked={value === choice} onChange={() => setOverride(skill.path, choice)} />
-                <span>{choice === "inherit" ? copy.inherit : choice === "enabled" ? copy.enabled : copy.disabled}</span>
+                <input type="radio" disabled={readOnly} checked={value === choice} onChange={() => setOverride(skill.path, choice)} />
+                <span>{choice === "inherit"
+                  ? `${copy.inherit}${english ? " (" : "（"}${inheritedStatus ? copy.effectiveOn : copy.effectiveOff}${english ? ")" : "）"}`
+                  : choice === "enabled" ? copy.enabled : copy.disabled}</span>
               </label>)}
             </fieldset>
           </div>;
@@ -1297,7 +1409,7 @@ function DefaultsWorkbench({ skills, total, query, setQuery, searchRef, scopeFil
   </div>;
 }
 
-function FilterBar({ query, setQuery, searchRef, scopeFilter, setScopeFilter, visibleCount, total, onEnable, onDisable }: {
+function FilterBar({ query, setQuery, searchRef, scopeFilter, setScopeFilter, visibleCount, total, readOnly = false, onInherit, onEnable, onDisable }: {
   query: string;
   setQuery(value: string): void;
   searchRef: React.RefObject<HTMLInputElement | null>;
@@ -1305,6 +1417,8 @@ function FilterBar({ query, setQuery, searchRef, scopeFilter, setScopeFilter, vi
   setScopeFilter(value: string): void;
   visibleCount: number;
   total: number;
+  readOnly?: boolean;
+  onInherit?: () => void;
   onEnable(): void;
   onDisable(): void;
 }) {
@@ -1338,10 +1452,13 @@ function FilterBar({ query, setQuery, searchRef, scopeFilter, setScopeFilter, vi
     </label>
     <span className="filter-summary">{visibleCount === total ? `${total} ${copy.skills}` : `${visibleCount} / ${total} ${copy.skills}`}</span>
     <div className="bulk-actions">
-      <button type="button" className="secondary-button" disabled={visibleCount === 0} onClick={onEnable}>
+      {onInherit && <button type="button" className="secondary-button" disabled={readOnly || visibleCount === 0} onClick={onInherit}>
+        <RotateCcw size={15} />{copy.inheritAll}{english ? ` (${visibleCount})` : `（${visibleCount}）`}
+      </button>}
+      <button type="button" className="secondary-button" disabled={readOnly || visibleCount === 0} onClick={onEnable}>
         <CircleCheck size={15} />{copy.enableAll}{english ? ` (${visibleCount})` : `（${visibleCount}）`}
       </button>
-      <button type="button" className="secondary-button" disabled={visibleCount === 0} onClick={onDisable}>
+      <button type="button" className="secondary-button" disabled={readOnly || visibleCount === 0} onClick={onDisable}>
         <CircleX size={15} />{copy.disableAll}{english ? ` (${visibleCount})` : `（${visibleCount}）`}
       </button>
     </div>
@@ -1415,12 +1532,14 @@ function updateOverride(
 function applyVisibleOverrides(
   current: SkillOverride[],
   skills: SkillMetadata[],
-  value: "enabled" | "disabled",
+  value: "inherit" | "enabled" | "disabled",
 ): SkillOverride[] {
   const visiblePaths = new Set(skills.map((skill) => skill.path));
   return [
     ...current.filter((item) => !visiblePaths.has(item.path)),
-    ...skills.map((skill) => ({ path: skill.path, state: value })),
+    ...(value === "inherit"
+      ? []
+      : skills.map((skill) => ({ path: skill.path, state: value }))),
   ];
 }
 

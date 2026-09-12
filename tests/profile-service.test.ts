@@ -103,4 +103,64 @@ describe("profile resolution", () => {
     expect(setup.client.batchWriteSkillsConfig).not.toHaveBeenCalled();
   });
 
+  it("writes native project overrides to .codex/config.toml", async () => {
+    const setup = await service();
+    await expect(setup.service.saveProjectConfiguration("/repo", [
+      { path: "/skills/a/SKILL.md", state: "disabled" },
+    ], false)).resolves.toEqual([
+      { path: "/skills/a/SKILL.md", enabled: false },
+    ]);
+
+    expect(setup.client.createDirectory).toHaveBeenCalledWith("/repo/.codex");
+    expect(setup.client.writeFile).toHaveBeenCalledWith(
+      "/repo/.codex/config.toml",
+      [
+        "[[skills.config]]",
+        'path = "/skills/a/SKILL.md"',
+        "enabled = false",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("keeps a project synchronized with its bound task profile", async () => {
+    const setup = await service();
+    const profile = await setup.service.saveProfile({
+      id: "p1",
+      name: "Daily",
+      overrides: [{ path: "/skills/a/SKILL.md", state: "enabled" }],
+    });
+    await setup.service.saveProjectConfiguration("/repo", [], true, profile.id);
+    expect(await setup.store.readProjectBindings()).toEqual({
+      schemaVersion: 1,
+      bindings: [{ cwd: "/repo", profileId: "p1", compatibilityMode: true }],
+    });
+
+    vi.mocked(setup.client.writeFile).mockClear();
+    await setup.service.saveProfile({
+      id: "p1",
+      name: "Daily",
+      overrides: [{ path: "/skills/a/SKILL.md", state: "disabled" }],
+    });
+
+    expect(setup.client.writeFile).toHaveBeenCalledWith(
+      "/repo/AGENTS.md",
+      expect.stringContaining("Do not invoke or read"),
+    );
+  });
+
+  it("turns bound projects into independent configurations when a profile is deleted", async () => {
+    const setup = await service();
+    const profile = await setup.service.saveProfile({
+      id: "p1",
+      name: "Daily",
+      overrides: [{ path: "/skills/a/SKILL.md", state: "enabled" }],
+    });
+    await setup.service.saveProjectConfiguration("/repo", [], true, profile.id);
+
+    await setup.service.deleteProfile(profile.id);
+
+    expect((await setup.store.readProjectBindings()).bindings).toEqual([]);
+  });
+
 });

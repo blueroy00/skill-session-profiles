@@ -29,6 +29,7 @@ test("new session overrides use the shared bulk controls", async ({ page }) => {
   await page.goto("/tests/e2e/demo.html");
   await expect(page.locator(".filter-bar").getByRole("textbox", { name: "搜索 skill" })).toBeVisible();
   await expect(page.locator(".command-bar").getByRole("textbox")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "全部继承（10）" })).toBeVisible();
   await expect(page.getByRole("button", { name: "全部启用（10）" })).toBeVisible();
   await expect(page.getByRole("button", { name: "全部禁用（10）" })).toBeVisible();
 });
@@ -69,12 +70,21 @@ test("workbench fills the window when no state banner is present", async ({ page
 test("project configuration selects from Codex projects", async ({ page }) => {
   await page.goto("/tests/e2e/demo.html");
   await page.getByRole("button", { name: "项目配置" }).click();
+  const compatibilityMode = page.getByRole("checkbox", { name: "兼容模式" });
+  await expect(compatibilityMode).toBeChecked();
   await expect(page.getByRole("button", { name: /Mineradio/ })).toBeVisible();
   await expect(page.getByRole("combobox", { name: "项目根目录" })).toBeVisible();
+  await page.getByText("兼容模式", { exact: true }).click();
+  await expect(compatibilityMode).not.toBeChecked();
+  await expect(page.getByText(/\.codex\/config\.toml/)).toBeVisible();
+  await page.getByRole("combobox", { name: "配置方式" }).selectOption("profile");
+  await expect(page.getByRole("combobox", { name: "任务配置" })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Code Review 设置" }).first().getByRole("radio", { name: "启用" })).toBeDisabled();
   await page.screenshot({
     path: "output/project-list.png",
     animations: "disabled",
   });
+  page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: /Mineradio/ }).click();
   await expect(page.getByRole("heading", { name: "Mineradio" })).toBeVisible();
 });

@@ -33,6 +33,18 @@ describe("JsonStore", () => {
     expect(JSON.parse(await readFile(join(store.root, "profiles.json"), "utf8"))).toEqual(value);
   });
 
+  it("persists project profile bindings separately from exported profiles", async () => {
+    const store = await createStore();
+    const value = {
+      schemaVersion: 1 as const,
+      bindings: [{ cwd: "/repo", profileId: "p1", compatibilityMode: false }],
+    };
+    await store.writeProjectBindings(value);
+
+    expect(await store.readProjectBindings()).toEqual(value);
+    expect(JSON.parse(await readFile(join(store.root, "project-bindings.json"), "utf8"))).toEqual(value);
+  });
+
   it("rejects invalid JSON and unknown schema versions", async () => {
     const store = await createStore();
     await mkdir(store.root, { recursive: true });

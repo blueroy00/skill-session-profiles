@@ -7,6 +7,27 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Let project configuration either follow a reusable task profile or keep
+  independent Skill overrides.
+- Show the effective enabled state beside inherited Skill settings.
+
+### Fixed
+
+- Preserve unsaved settings when the currently selected task profile is
+  clicked again.
+
+## [0.4.0] - 2026-08-26
+
+### Added
+
+- Add a persistent compatibility-mode switch for project Skill configuration.
+- Add an Inherit All action that clears explicit overrides for the currently
+  filtered Skills while preserving hidden overrides.
+- Write project Skill overrides to `.codex/config.toml` when compatibility mode
+  is disabled, while preserving unrelated TOML settings and comments.
+
 ### Changed
 
 - Re-license the project from MIT to GPL-3.0-only.

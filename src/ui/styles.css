@@ -747,9 +747,12 @@ dd {
 
 .pane-actions {
   gap: var(--space-sm);
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
-.project-root-select {
+.project-root-select,
+.project-option-select {
   display: flex;
   align-items: center;
   gap: var(--space-sm);
@@ -757,7 +760,8 @@ dd {
   font-size: 12px;
 }
 
-.project-root-select select {
+.project-root-select select,
+.project-option-select select {
   min-height: 34px;
   max-width: 220px;
   padding: 0 28px 0 9px;
@@ -1030,6 +1034,10 @@ dd {
   min-width: 28px;
   font-size: 12px;
   font-weight: 500;
+}
+
+.project-mode-toggle strong {
+  white-space: nowrap;
 }
 
 .table-empty {

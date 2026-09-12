@@ -1,4 +1,5 @@
 import {
+  extractProjectSkillLayer,
   extractProjectResourceLayer,
   extractUserResourceLayer,
   extractUserSkillLayer,
@@ -46,7 +47,10 @@ const absolutePathSchema = z.string().refine(
 const callSchema = z.discriminatedUnion("name", [
   z.object({
     name: z.literal("get_skill_profile_state"),
-    args: z.object({ cwd: absolutePathSchema }),
+    args: z.object({
+      cwd: absolutePathSchema,
+      compatibilityMode: z.boolean().default(true),
+    }),
   }),
   z.object({
     name: z.literal("save_global_skill_defaults"),
@@ -80,6 +84,8 @@ const callSchema = z.discriminatedUnion("name", [
     args: z.object({
       cwd: absolutePathSchema,
       overrides: z.array(skillOverrideSchema),
+      compatibilityMode: z.boolean().default(true),
+      profileId: z.string().nullable().default(null),
     }),
   }),
   z.object({
@@ -123,7 +129,10 @@ export class SkillProfileBackend {
     this.resourceService = new ResourceControlService(client, store);
   }
 
-  async state(cwd: string) {
+  async state(cwd: string, compatibilityMode = true) {
+    const projectSkillPolicyPromise = compatibilityMode
+      ? readProjectSkillPolicy(this.client, cwd)
+      : Promise.resolve(undefined);
     const [
       inventory,
       config,
@@ -134,6 +143,7 @@ export class SkillProfileBackend {
       pluginList,
       curatedSkillPaths,
       projectSkillPolicy,
+      projectBindings,
     ] = await Promise.all([
       this.client.listSkills([cwd]),
       this.client.readConfig(cwd),
@@ -143,8 +153,11 @@ export class SkillProfileBackend {
       listCodexProjects(),
       this.client.listPlugins().catch((): null => null),
       readCodexCuratedSkillPaths(),
-      readProjectSkillPolicy(this.client, cwd),
+      projectSkillPolicyPromise,
+      this.store.readProjectBindings(),
     ]);
+    const projectSkillConfig = projectSkillPolicy
+      ?? extractProjectSkillLayer(config, cwd);
     const plugins = pluginInventory(pluginList, globalConfig, config);
     const mcpServers = mcpInventory(globalConfig, config);
     const globalPluginConfig = resourceValues(
@@ -166,12 +179,24 @@ export class SkillProfileBackend {
     const toInventoryPaths = (value: SkillConfigEntry[]) => value
       .filter((entry): entry is SkillConfigEntry & { path: string } => entry.path !== undefined)
       .map((entry) => ({ ...entry, path: inventoryPaths.get(normalize(entry.path)) ?? entry.path }));
+    const projectBinding = projectBindings.bindings.find((binding) =>
+      normalize(binding.cwd) === normalize(cwd));
+    const boundProfile = profiles.profiles.find((profile) => profile.id === projectBinding?.profileId);
+    const boundValue = boundProfile === undefined
+      ? undefined
+      : boundProfile.overrides
+          .filter(({ path }) => inventoryPaths.has(normalize(path)))
+          .map(({ path, state }) => ({
+            path,
+            enabled: state === "enabled",
+          }));
     return {
       skills,
       globalDefaults: toInventoryPaths(extractUserSkillLayer(config).value),
       projectConfig: {
-        filePath: projectSkillPolicy.filePath,
-        value: toInventoryPaths(projectSkillPolicy.value),
+        filePath: projectSkillConfig.filePath,
+        value: toInventoryPaths(boundValue ?? projectSkillConfig.value),
+        profileId: boundProfile?.id ?? null,
       },
       plugins,
       mcpServers,
@@ -190,7 +215,7 @@ export class SkillProfileBackend {
     const input = callSchema.parse({ name, args });
     switch (input.name) {
       case "get_skill_profile_state":
-        return this.state(input.args.cwd);
+        return this.state(input.args.cwd, input.args.compatibilityMode);
       case "save_global_skill_defaults":
         await this.service.saveGlobalDefaults(input.args.cwd, input.args.value);
         return this.state(input.args.cwd);
@@ -208,7 +233,14 @@ export class SkillProfileBackend {
           ),
         };
       case "save_project_skill_configuration":
-        return { value: await this.service.saveProjectConfiguration(input.args.cwd, input.args.overrides) };
+        return {
+          value: await this.service.saveProjectConfiguration(
+            input.args.cwd,
+            input.args.overrides,
+            input.args.compatibilityMode,
+            input.args.profileId,
+          ),
+        };
       case "save_global_resource_configuration": {
         const current = await this.state(input.args.cwd);
         return {
@@ -235,21 +267,7 @@ export class SkillProfileBackend {
         return this.store.readProfiles();
       case "import_skill_profiles": {
         const incoming = profilesFileSchema.parse(JSON.parse(input.args.data));
-        await this.store.withLock(async () => {
-          const current = await this.store.readProfiles();
-          await this.store.writeProfiles({
-            schemaVersion: 1,
-            profiles: input.args.mode === "replace"
-              ? incoming.profiles
-              : [
-                  ...current.profiles.filter(
-                    (a) => !incoming.profiles.some((b) => a.id === b.id),
-                  ),
-                  ...incoming.profiles,
-                ],
-          });
-        });
-        return this.store.readProfiles();
+        return this.service.importProfiles(incoming, input.args.mode);
       }
     }
   }

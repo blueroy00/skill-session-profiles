@@ -3,7 +3,9 @@ import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import {
+  projectBindingsFileSchema,
   profilesFileSchema,
+  type ProjectBindingsFile,
   type ProfilesFile,
 } from "../shared/contracts.js";
 
@@ -39,6 +41,17 @@ export class JsonStore {
 
   writeProfiles(value: ProfilesFile): Promise<void> {
     return this.atomicWrite("profiles.json", profilesFileSchema.parse(value));
+  }
+
+  async readProjectBindings(): Promise<ProjectBindingsFile> {
+    const raw = await this.readOptional("project-bindings.json");
+    return raw === undefined
+      ? { schemaVersion: 1, bindings: [] }
+      : projectBindingsFileSchema.parse(JSON.parse(raw));
+  }
+
+  writeProjectBindings(value: ProjectBindingsFile): Promise<void> {
+    return this.atomicWrite("project-bindings.json", projectBindingsFileSchema.parse(value));
   }
 
   async appendAudit(event: Record<string, unknown>): Promise<void> {
